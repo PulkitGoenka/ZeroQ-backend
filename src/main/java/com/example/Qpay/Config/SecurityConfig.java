@@ -1,5 +1,6 @@
 package com.example.Qpay.Config;
 
+import com.example.Qpay.Security.AdminApiKeyFilter;
 import com.example.Qpay.Security.JwtAuthFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,8 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
 
+    private final AdminApiKeyFilter adminApiKeyFilter;
+
 
     private static final String[] PUBLIC_ENDPOINTS = {
             "/api/v1/auth/**",
@@ -37,7 +40,8 @@ public class SecurityConfig {
             "/actuator/health",
             "/api/v1/stores/by-qr/**",
             "/api/v1/stores/by-pincode",
-            "/api/v1/stores/by-state" // store QR scan is pre-auth
+            "/api/v1/stores/by-state",
+            "api/v1/admin/**"
     };
 
     // Internal guard/counter endpoints — in production secure with a separate API key or role
@@ -57,6 +61,7 @@ public class SecurityConfig {
                         .requestMatchers(INTERNAL_ENDPOINTS).permitAll()  // secured separately in service layer
                         .anyRequest().authenticated()
                 )
+                .addFilterBefore(adminApiKeyFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

@@ -32,6 +32,9 @@ public class Brands{
      @Builder.Default
      private Boolean isActive = true;
 
+     @Column(name = "custom_fields", columnDefinition = "TEXT")
+     private String customFields;
+
      @CreationTimestamp
      private OffsetDateTime createdAt;
 

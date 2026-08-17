@@ -46,6 +46,9 @@ public class Stores {
     @Builder.Default
     private Boolean isActive = true;
 
+    @Column(name = "custom_fields", columnDefinition = "TEXT")
+    private String customFields;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;

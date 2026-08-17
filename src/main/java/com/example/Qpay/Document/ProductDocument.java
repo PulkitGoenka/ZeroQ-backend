@@ -9,7 +9,9 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Document(collection = "products")
 @Data
@@ -46,6 +48,9 @@ public class ProductDocument {
     // Har store ka apna price + stock + history
     @Builder.Default
     private List<StorePrice> storePrices = new ArrayList<>();
+
+    @Builder.Default
+    private Map<String, Object> customFields = new HashMap<>();
 
     private OffsetDateTime createdAt;
 
