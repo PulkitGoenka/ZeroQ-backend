@@ -9,6 +9,7 @@ import com.example.Qpay.Repository.mongo.ProductMongoRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -20,6 +21,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/admin")
 @CrossOrigin(origins = "*")
+@Transactional // keeps the Hibernate session open so lazy relations (e.g. Store.brand) can be read
 public class AdminCatalogController {
 
     @Autowired private BrandsRepository brandsRepository;

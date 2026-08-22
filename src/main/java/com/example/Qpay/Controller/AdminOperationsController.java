@@ -5,6 +5,7 @@ import com.example.Qpay.Repository.*;
 import com.example.Qpay.enums.SessionStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -16,6 +17,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/admin")
 @CrossOrigin(origins = "*")
+@Transactional // keeps the Hibernate session open so lazy relations (Session.user/store, Order.user/store) can be read
 public class AdminOperationsController {
 
     @Autowired private OrderRepository orderRepository;
