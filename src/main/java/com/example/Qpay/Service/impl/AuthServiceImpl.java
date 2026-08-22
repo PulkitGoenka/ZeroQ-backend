@@ -53,6 +53,17 @@ public class AuthServiceImpl implements AuthService {
     @Value("${jwt.expiration-ms}")
     private long jwtExpirationMs;
 
+    // ── TEMPORARY: OTP bypass for testing while Twilio quota is exhausted ─────
+    // Set OTP_BYPASS_ENABLED=true on Render to skip real SMS sending, and let
+    // OTP_BYPASS_CODE (any phone + this code) log in without a real OTP.
+    // Set OTP_BYPASS_ENABLED=false (or remove the var) to go back to normal
+    // Twilio-verified OTP flow — no code changes needed either way.
+    @Value("${otp.bypass-enabled:false}")
+    private boolean otpBypassEnabled;
+
+    @Value("${otp.bypass-code:000000}")
+    private String otpBypassCode;
+
     // ── Send OTP ──────────────────────────────────────────────────────────────
 
     @Override
@@ -77,8 +88,14 @@ public class AuthServiceImpl implements AuthService {
             );
         }
 
-        // ✅ Twilio se SMS bhejo
-        smsService.sendOtp(phone, otp);
+        if (otpBypassEnabled) {
+            // Twilio quota bacha rahe hain — SMS bheja hi nahi, sirf log me OTP print
+            // (ya universal bypass code "${otp.bypass-code}" bhi use kar sakte ho).
+            log.warn("OTP BYPASS active — not sending real SMS. OTP for {} is {} (bypass code: {})",
+                    phone, otp, otpBypassCode);
+        } else {
+            smsService.sendOtp(phone, otp);
+        }
 
         log.info("OTP sent to {} (newUser={})", phone, isNewUser);
         return ApiResponse.OtpSent.builder()
@@ -115,8 +132,12 @@ public class AuthServiceImpl implements AuthService {
         storeOtpInRedis(phone, otp);
         saveOtpLog(phone, otp);
 
-        // ✅ Twilio se SMS bhejo
-        smsService.sendOtp(phone, otp);
+        if (otpBypassEnabled) {
+            log.warn("OTP BYPASS active — not resending real SMS. OTP for {} is {} (bypass code: {})",
+                    phone, otp, otpBypassCode);
+        } else {
+            smsService.sendOtp(phone, otp);
+        }
 
         log.info("OTP resent to {}", phone);
         return ApiResponse.OtpSent.builder()
@@ -135,16 +156,21 @@ public class AuthServiceImpl implements AuthService {
         String phone = request.getPhone();
         String submittedOtp = request.getOtp();
 
-        Object storedRaw = redisTemplate.opsForValue().get(RedisKeys.otp(phone));
-        if (storedRaw == null) {
-            throw new OtpException("OTP has expired. Please request a new one.");
+        // Bypass path: universal code always works while OTP_BYPASS_ENABLED=true,
+        // regardless of what's actually stored in Redis.
+        boolean usedBypassCode = otpBypassEnabled && otpBypassCode.equals(submittedOtp);
+
+        if (!usedBypassCode) {
+            Object storedRaw = redisTemplate.opsForValue().get(RedisKeys.otp(phone));
+            if (storedRaw == null) {
+                throw new OtpException("OTP has expired. Please request a new one.");
+            }
+            if (!passwordEncoder.matches(submittedOtp, storedRaw.toString())) {
+                throw new OtpException("Invalid OTP. Please check and try again.");
+            }
         }
 
-        if (!passwordEncoder.matches(submittedOtp, storedRaw.toString())) {
-            throw new OtpException("Invalid OTP. Please check and try again.");
-        }
-
-        // OTP invalidate karo
+        // OTP invalidate karo (safe no-op agar bypass use hua ho aur keys already na ho)
         redisTemplate.delete(RedisKeys.otp(phone));
         redisTemplate.delete(RedisKeys.otpCooldown(phone));
 
@@ -178,7 +204,7 @@ public class AuthServiceImpl implements AuthService {
                 .expiresAt(OffsetDateTime.now().plusDays(7))
                 .build());
 
-        log.info("User {} authenticated successfully", phone);
+        log.info("User {} authenticated successfully{}", phone, usedBypassCode ? " (via OTP bypass)" : "");
         return ApiResponse.AuthToken.builder()
                 .accessToken(accessToken).refreshToken(refreshTokenStr)
                 .expiresInMs(jwtExpirationMs)

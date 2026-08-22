@@ -41,7 +41,7 @@ public class SecurityConfig {
             "/api/v1/stores/by-qr/**",
             "/api/v1/stores/by-pincode",
             "/api/v1/stores/by-state",
-            "api/v1/admin/**"
+            "api/v1/admin**"
     };
 
     // Internal guard/counter endpoints — in production secure with a separate API key or role
