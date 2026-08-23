@@ -44,6 +44,17 @@ public class CartServiceImpl implements CartService {
     @Value("${session.cart-ttl-hours:24}")
     private int cartTtlHours;
 
+    // Max quantity of a single product allowed per checkout — keeps counter/exit
+    // verification manageable and discourages bulk-buying at self-checkout.
+    @Value("${cart.max-quantity-per-product:20}")
+    private int maxQuantityPerProduct;
+
+    // How long a scanned product's data stays cached in Redis before the next
+    // scan re-fetches it from MongoDB. Keeps repeat scans of popular items fast
+    // without hammering Mongo during rush hours.
+    @Value("${product.cache-ttl-seconds:120}")
+    private int productCacheTtlSeconds;
+
     // ── Start Session ─────────────────────────────────────────────────────────
 
     @Override
@@ -91,11 +102,18 @@ public class CartServiceImpl implements CartService {
         // 1. Active session load karo
         ActiveSessionContext ctx = loadActiveContext(principal.getId());
 
-        // 2. MongoDB se product dhoondho — us store ke liye
-        ProductDocument product = productMongoRepository
-                .findByBarcodeAndStoreIdAndAvailable(request.getBarcode(), ctx.cart().getStoreId().toString())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Product not found for barcode: " + request.getBarcode()));
+        // 2. Pehle Redis cache check karo — us store ke liye ye barcode already
+        //    kisi ne (2 min ke andar) scan kiya ho toh Mongo touch nahi karna.
+        String productCacheKey = "product:cache:" + ctx.cart().getStoreId() + ":" + request.getBarcode();
+        ProductDocument product = loadProductFromCache(productCacheKey)
+                .orElseGet(() -> {
+                    ProductDocument fetched = productMongoRepository
+                            .findByBarcodeAndStoreIdAndAvailable(request.getBarcode(), ctx.cart().getStoreId().toString())
+                            .orElseThrow(() -> new ResourceNotFoundException(
+                                    "Product not found for barcode: " + request.getBarcode()));
+                    cacheProduct(productCacheKey, fetched);
+                    return fetched;
+                });
 
         // 3. Us store ka price nikalo
         ProductDocument.StorePrice storePrice = product.getStorePrices().stream()
@@ -113,10 +131,16 @@ public class CartServiceImpl implements CartService {
                 ? discountAmt.multiply(BigDecimal.valueOf(100)).divide(mrp, 2, java.math.RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
 
-        // 5. Cart me add karo (already hai to quantity +1)
+        // 5. Cart me add karo (already hai to quantity +1) — 20-unit limit ke saath
         RedisCart.CartItem existing = ctx.cart().getItems().get(request.getBarcode());
         if (existing != null) {
-            existing.setQuantity(existing.getQuantity() + 1);
+            int newQty = existing.getQuantity() + 1;
+            if (newQty > maxQuantityPerProduct) {
+                throw new SessionException(
+                        "You can add a maximum of " + maxQuantityPerProduct + " units of \""
+                                + product.getName() + "\" per checkout.");
+            }
+            existing.setQuantity(newQty);
         } else {
             RedisCart.CartItem newItem = RedisCart.CartItem.builder()
                     .barcode(product.getBarcode())
@@ -161,6 +185,10 @@ public class CartServiceImpl implements CartService {
         if (request.getQuantity() == 0) {
             ctx.cart().getItems().remove(request.getBarcode());
         } else {
+            if (request.getQuantity() > maxQuantityPerProduct) {
+                throw new SessionException(
+                        "You can add a maximum of " + maxQuantityPerProduct + " units of this product per checkout.");
+            }
             RedisCart.CartItem item = ctx.cart().getItems().get(request.getBarcode());
             if (item == null) throw new ResourceNotFoundException("Item not found in cart.");
             item.setQuantity(request.getQuantity());
@@ -268,6 +296,30 @@ public class CartServiceImpl implements CartService {
         } catch (JsonProcessingException e) {
             log.error("Failed to deserialize cart: {}", e.getMessage());
             return Optional.empty();
+        }
+    }
+
+    // ── Product caching (2 min, per store+barcode) ───────────────────────────
+
+    private Optional<ProductDocument> loadProductFromCache(String key) {
+        Object raw = redisTemplate.opsForValue().get(key);
+        if (raw == null) return Optional.empty();
+        try {
+            String json = raw instanceof String s ? s : objectMapper.writeValueAsString(raw);
+            return Optional.of(objectMapper.readValue(json, ProductDocument.class));
+        } catch (JsonProcessingException e) {
+            log.error("Failed to deserialize cached product: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private void cacheProduct(String key, ProductDocument product) {
+        try {
+            redisTemplate.opsForValue().set(
+                    key, objectMapper.writeValueAsString(product), productCacheTtlSeconds, TimeUnit.SECONDS);
+        } catch (JsonProcessingException e) {
+            // Caching is best-effort — a failed cache write shouldn't block the scan.
+            log.warn("Failed to cache product {}: {}", product.getBarcode(), e.getMessage());
         }
     }
 

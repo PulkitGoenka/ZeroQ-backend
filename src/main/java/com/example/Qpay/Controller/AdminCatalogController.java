@@ -8,6 +8,7 @@ import com.example.Qpay.Repository.StoreRepository;
 import com.example.Qpay.Repository.mongo.ProductMongoRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -27,6 +28,7 @@ public class AdminCatalogController {
     @Autowired private BrandsRepository brandsRepository;
     @Autowired private StoreRepository storeRepository;
     @Autowired private ProductMongoRepository productMongoRepository;
+    @Autowired private RedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // ── helpers to convert customFields Map <-> JSON string ──────
@@ -178,13 +180,19 @@ public class AdminCatalogController {
         product.setId(null);
         product.setCreatedAt(java.time.OffsetDateTime.now());
         product.setUpdatedAt(java.time.OffsetDateTime.now());
-        return productMongoRepository.save(product);
+        ProductDocument saved = productMongoRepository.save(product);
+        invalidateProductCache(saved);
+        return saved;
     }
 
     @PutMapping("/products/{id}")
     public ProductDocument updateProduct(@PathVariable String id, @RequestBody ProductDocument updated) {
         ProductDocument existing = productMongoRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Product not found"));
+
+        // Invalidate the OLD store-price entries too, in case a store was
+        // removed from the product — its scan cache should still clear.
+        invalidateProductCache(existing);
 
         existing.setBarcode(updated.getBarcode());
         existing.setBrandSlug(updated.getBrandSlug());
@@ -199,12 +207,26 @@ public class AdminCatalogController {
         existing.setCustomFields(updated.getCustomFields());
         existing.setUpdatedAt(java.time.OffsetDateTime.now());
 
-        return productMongoRepository.save(existing);
+        ProductDocument saved = productMongoRepository.save(existing);
+        invalidateProductCache(saved); // clear the NEW store-price entries too
+        return saved;
     }
 
     @DeleteMapping("/products/{id}")
     public ResponseEntity<?> deleteProduct(@PathVariable String id) {
+        productMongoRepository.findById(id).ifPresent(this::invalidateProductCache);
         productMongoRepository.deleteById(id);
         return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    /**
+     * Clears the "product:cache:{storeId}:{barcode}" Redis key for every store
+     * this product is priced at, so the next scan always pulls fresh data
+     * instead of serving stale price/stock from the 2-minute scan cache.
+     */
+    private void invalidateProductCache(ProductDocument product) {
+        if (product.getStorePrices() == null || product.getBarcode() == null) return;
+        product.getStorePrices().forEach(sp ->
+                redisTemplate.delete("product:cache:" + sp.getStoreId() + ":" + product.getBarcode()));
     }
 }
