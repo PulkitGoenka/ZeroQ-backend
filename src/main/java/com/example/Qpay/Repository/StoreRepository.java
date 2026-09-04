@@ -23,21 +23,27 @@ public interface StoreRepository extends JpaRepository<Stores, UUID> {
             @Param("pincode") String pincode
     );
 
-    // State — brandId optional
-    @Query("SELECT s FROM Stores s WHERE LOWER(s.state) = LOWER(:state) " +
-            "AND s.isActive = true " +
-            "AND (:brandId IS NULL OR s.brand.id = :brandId) " +
-            "ORDER BY s.name")
+    // State — ab FUZZY + PARTIAL match (pg_trgm)
+    @Query(value =
+            "SELECT * FROM stores s WHERE s.is_active = true " +
+                    "AND (:brandId IS NULL OR s.brand_id = :brandId) " +
+                    "AND (s.state ILIKE CONCAT('%', :state, '%') " +
+                    "     OR similarity(s.state, :state) > 0.25) " +
+                    "ORDER BY similarity(s.state, :state) DESC, s.name ASC",
+            nativeQuery = true)
     List<Stores> findByBrandAndState(
             @Param("brandId") UUID brandId,
             @Param("state") String state
     );
 
-    // District — NAYA, brandId optional
-    @Query("SELECT s FROM Stores s WHERE LOWER(s.district) = LOWER(:district) " +
-            "AND s.isActive = true " +
-            "AND (:brandId IS NULL OR s.brand.id = :brandId) " +
-            "ORDER BY s.name")
+    // District — ab FUZZY + PARTIAL match (pg_trgm)
+    @Query(value =
+            "SELECT * FROM stores s WHERE s.is_active = true " +
+                    "AND (:brandId IS NULL OR s.brand_id = :brandId) " +
+                    "AND (s.district ILIKE CONCAT('%', :district, '%') " +
+                    "     OR similarity(s.district, :district) > 0.25) " +
+                    "ORDER BY similarity(s.district, :district) DESC, s.name ASC",
+            nativeQuery = true)
     List<Stores> findByBrandAndDistrict(
             @Param("brandId") UUID brandId,
             @Param("district") String district
