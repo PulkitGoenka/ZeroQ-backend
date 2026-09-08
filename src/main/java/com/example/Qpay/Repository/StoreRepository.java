@@ -13,7 +13,7 @@ import java.util.UUID;
 @Repository
 public interface StoreRepository extends JpaRepository<Stores, UUID> {
 
-    // Pincode — brandId optional: null hoga to sab brands ke stores aayenge
+    // 1. Pincode
     @Query("SELECT s FROM Stores s WHERE s.pincode = :pincode " +
             "AND s.isActive = true " +
             "AND (:brandId IS NULL OR s.brand.id = :brandId) " +
@@ -23,32 +23,26 @@ public interface StoreRepository extends JpaRepository<Stores, UUID> {
             @Param("pincode") String pincode
     );
 
-    // State — ab FUZZY + PARTIAL match (pg_trgm)
-    @Query(value =
-            "SELECT * FROM stores s WHERE s.is_active = true " +
-                    "AND (:brandId IS NULL OR s.brand_id = :brandId) " +
-                    "AND (s.state ILIKE CONCAT('%', :state, '%') " +
-                    "     OR similarity(s.state, :state) > 0.25) " +
-                    "ORDER BY similarity(s.state, :state) DESC, s.name ASC",
-            nativeQuery = true)
+    // 2. State (Safe JPQL Case-Insensitive partial search)
+    @Query("SELECT s FROM Stores s WHERE s.isActive = true " +
+            "AND (:brandId IS NULL OR s.brand.id = :brandId) " +
+            "AND LOWER(s.state) LIKE LOWER(CONCAT('%', :state, '%')) " +
+            "ORDER BY s.name ASC")
     List<Stores> findByBrandAndState(
             @Param("brandId") UUID brandId,
             @Param("state") String state
     );
 
-    // District — ab FUZZY + PARTIAL match (pg_trgm)
-    @Query(value =
-            "SELECT * FROM stores s WHERE s.is_active = true " +
-                    "AND (:brandId IS NULL OR s.brand_id = :brandId) " +
-                    "AND (s.district ILIKE CONCAT('%', :district, '%') " +
-                    "     OR similarity(s.district, :district) > 0.25) " +
-                    "ORDER BY similarity(s.district, :district) DESC, s.name ASC",
-            nativeQuery = true)
+    // 3. District (Safe JPQL Case-Insensitive partial search)
+    @Query("SELECT s FROM Stores s WHERE s.isActive = true " +
+            "AND (:brandId IS NULL OR s.brand.id = :brandId) " +
+            "AND LOWER(s.district) LIKE LOWER(CONCAT('%', :district, '%')) " +
+            "ORDER BY s.name ASC")
     List<Stores> findByBrandAndDistrict(
             @Param("brandId") UUID brandId,
             @Param("district") String district
     );
 
-    // QR Code
+    // 4. QR Code
     Optional<Stores> findByQrCodeAndIsActiveTrue(String qrCode);
 }

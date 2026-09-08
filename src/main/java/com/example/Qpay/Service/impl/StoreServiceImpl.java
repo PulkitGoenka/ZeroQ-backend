@@ -19,14 +19,12 @@ public class StoreServiceImpl implements StoreService {
 
     private final StoreRepository storeRepository;
 
-    // brandId String → UUID converter
-    // null/blank → null return karo (query me filter nahi lagega)
     private UUID parseBrandId(String raw) {
         if (raw == null || raw.isBlank()) return null;
         try {
-            return UUID.fromString(raw);
+            return UUID.fromString(raw.trim());
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Invalid brandId: " + raw);
+            return null;
         }
     }
 
@@ -34,11 +32,8 @@ public class StoreServiceImpl implements StoreService {
     @Transactional(readOnly = true)
     public List<ApiResponse.StoreDto> findByPincode(StoreRequest.ByPincode request) {
         UUID brandId = parseBrandId(request.getBrandId());
-        List<Stores> stores = storeRepository.findByBrandAndPincode(brandId, request.getPincode());
-        if (stores.isEmpty()) {
-            throw new ResourceNotFoundException(
-                    "No stores found for this pincode. Try searching by district or state.");
-        }
+        String pin = request.getPincode() != null ? request.getPincode().trim() : "";
+        List<Stores> stores = storeRepository.findByBrandAndPincode(brandId, pin);
         return stores.stream().map(this::toDto).toList();
     }
 
@@ -46,46 +41,37 @@ public class StoreServiceImpl implements StoreService {
     @Transactional(readOnly = true)
     public List<ApiResponse.StoreDto> findByState(StoreRequest.ByState request) {
         UUID brandId = parseBrandId(request.getBrandId());
-        List<Stores> stores = storeRepository.findByBrandAndState(brandId, request.getState());
-        if (stores.isEmpty()) {
-            throw new ResourceNotFoundException(
-                    "No stores found in this state for the selected brand.");
-        }
+        String state = request.getState() != null ? request.getState().trim() : "";
+        List<Stores> stores = storeRepository.findByBrandAndState(brandId, state);
         return stores.stream().map(this::toDto).toList();
     }
 
-    // ── NAYA ──────────────────────────────────────────────────
     @Override
     @Transactional(readOnly = true)
     public List<ApiResponse.StoreDto> findByDistrict(StoreRequest.ByDistrict request) {
         UUID brandId = parseBrandId(request.getBrandId());
-        List<Stores> stores = storeRepository.findByBrandAndDistrict(brandId, request.getDistrict());
-        if (stores.isEmpty()) {
-            throw new ResourceNotFoundException(
-                    "No stores found in this district. Try searching by state.");
-        }
+        String district = request.getDistrict() != null ? request.getDistrict().trim() : "";
+        List<Stores> stores = storeRepository.findByBrandAndDistrict(brandId, district);
         return stores.stream().map(this::toDto).toList();
     }
-    // ──────────────────────────────────────────────────────────
 
     @Override
     @Transactional(readOnly = true)
     public ApiResponse.StoreDto findByQrCode(String qrCode) {
         Stores store = storeRepository.findByQrCodeAndIsActiveTrue(qrCode)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Store QR code is invalid or the store is inactive."));
+                .orElseThrow(() -> new ResourceNotFoundException("Store QR code is invalid or inactive."));
         return toDto(store);
     }
 
     private ApiResponse.StoreDto toDto(Stores s) {
         return ApiResponse.StoreDto.builder()
                 .id(s.getId())
-                .brandId(s.getBrand().getId())
-                .brandName(s.getBrand().getName())
+                .brandId(s.getBrand() != null ? s.getBrand().getId() : null)
+                .brandName(s.getBrand() != null ? s.getBrand().getName() : "")
                 .name(s.getName())
                 .address(s.getAddress())
                 .city(s.getCity())
-                .district(s.getDistrict())  // district bhi bhejo — frontend me dikhega
+                .district(s.getDistrict())
                 .state(s.getState())
                 .pincode(s.getPincode())
                 .build();
