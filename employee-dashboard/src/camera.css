@@ -1,0 +1,36 @@
+.camera-modal > div {
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.camera-modal h3 {
+  margin: 0;
+  color: var(--deep);
+}
+
+.camera-help {
+  color: #6d8181;
+  font-size: 13px;
+  margin: 7px 0 14px;
+}
+
+#barcode-reader {
+  min-height: 280px;
+  background: #102f31;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+#barcode-reader video {
+  display: block !important;
+  width: 100% !important;
+}
+
+.camera-error {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff0ed;
+  color: #a33b2d;
+  font-size: 13px;
+}
