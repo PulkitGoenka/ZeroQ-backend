@@ -3,8 +3,10 @@ package com.example.Qpay.DTO;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.example.Qpay.enums.PaymentMethod;
 import com.example.Qpay.enums.SessionStatus;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -16,7 +18,9 @@ public class ApiResponse {
 
     // ── Generic Wrapper ───────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class Success<T> {
+        @Builder.Default
         private boolean success = true;
         private String message;
         private T data;
@@ -24,6 +28,7 @@ public class ApiResponse {
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class OtpSent {
         private String phone;
         private boolean newUser;
@@ -32,6 +37,7 @@ public class ApiResponse {
     }
 
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class AuthToken {
         private String accessToken;
         private String refreshToken;
@@ -40,6 +46,7 @@ public class ApiResponse {
     }
 
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class UserInfo {
         private UUID id;
         private String phone;
@@ -49,15 +56,17 @@ public class ApiResponse {
 
     // ── Brand ─────────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class BrandDto {
         private UUID id;
         private String name;
         private String slug;
-        private String logoUrl;     // App mein brand logo dikhega
+        private String logoUrl;
     }
 
     // ── Store ─────────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class StoreDto {
         private UUID id;
         private UUID brandId;
@@ -72,6 +81,7 @@ public class ApiResponse {
 
     // ── Cart ──────────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class CartItemDto {
         private String barcode;
         private String productName;
@@ -84,6 +94,7 @@ public class ApiResponse {
     }
 
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class CartDto {
         private UUID sessionId;
         private UUID storeId;
@@ -96,18 +107,19 @@ public class ApiResponse {
     }
 
     // ── Scan History ──────────────────────────────────────────────────────────
-    // ✅ imageUrl add kiya — history mein product image dikhegi
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class ScanHistoryItemDto {
         private String barcode;
         private String productName;
-        private String imageUrl;        // ✅ NEW
+        private String imageUrl;
         private BigDecimal discountPrice;
         private OffsetDateTime scannedAt;
     }
 
     // ── Session ───────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class SessionDto {
         private UUID sessionId;
         private SessionStatus status;
@@ -118,16 +130,23 @@ public class ApiResponse {
 
     // ── Payment ───────────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class PaymentInitiated {
         private UUID orderId;
         private PaymentMethod method;
         private BigDecimal totalAmount;
-        private String qrToken;         // Raw token
-        private String qrImageBase64;   // PNG QR image as base64 — app mein dikhao
-        private int qrExpirySeconds;    // Kitne second mein expire hoga
+        private String qrToken;
+        private String qrImageBase64;
+        private int qrExpirySeconds;
+
+        // ✅ Razorpay integration fields
+        private String razorpayOrderId;
+        private Long amountInPaise;
+        private String razorpayKeyId;
     }
 
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class BillDto {
         private UUID orderId;
         private String billRef;
@@ -142,6 +161,7 @@ public class ApiResponse {
     }
 
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class BillItemDto {
         private String barcode;
         private String productName;
@@ -153,6 +173,7 @@ public class ApiResponse {
 
     // ── Payment History ───────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class PaymentHistoryDto {
         private UUID id;
         private UUID orderId;
@@ -165,8 +186,9 @@ public class ApiResponse {
         private OffsetDateTime paidAt;
     }
 
-    // ── Counter Cart (Billing counter ke liye) ────────────────────────────────
+    // ── Counter Cart ──────────────────────────────────────────────────────────
     @Data @Builder
+    @NoArgsConstructor @AllArgsConstructor
     public static class CounterCartDto {
         private UUID orderId;
         private UUID userId;

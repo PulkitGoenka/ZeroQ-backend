@@ -1,10 +1,10 @@
 package com.example.Qpay.Service.impl;
+
 import com.example.Qpay.DTO.*;
 import com.example.Qpay.DTO.RedisCart;
 import com.example.Qpay.Entity.*;
 import com.example.Qpay.Repository.PaymentHistoryRepository;
 import com.example.Qpay.Repository.ShoppingSessionRepository;
-import  com.example.Qpay.Repository.RefreshTokenRepository;
 import com.example.Qpay.Repository.mongo.ProductMongoRepository;
 import com.example.Qpay.Security.UserPrincipal;
 import com.example.Qpay.Service.PaymentService;
@@ -17,9 +17,11 @@ import com.example.Qpay.Service.CartService;
 import com.example.Qpay.Util.RedisKeys;
 import com.example.Qpay.enums.*;
 import com.example.Qpay.enums.SessionStatus;
-import jakarta.websocket.SessionException;
+import com.razorpay.RazorpayClient;
+import com.razorpay.Utils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -27,6 +29,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -43,7 +46,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final OrderRepository orderRepository;
     private final PaymentHistoryRepository paymentHistoryRepository;
     private final ShoppingSessionRepository sessionRepository;
-    private final ProductMongoRepository productMongoRepository; // MongoDB
+    private final ProductMongoRepository productMongoRepository;
     private final QrCodeUtil qrCodeUtil;
     private final RedisTemplate<String, Object> redisTemplate;
 
@@ -53,7 +56,13 @@ public class PaymentServiceImpl implements PaymentService {
     @Value("${session.cart-qr-ttl-minutes:30}")
     private int counterQrTtlMinutes;
 
-    // ── Online Payment ────────────────────────────────────────────────────────
+    @Value("${razorpay.key.id}")
+    private String razorpayKeyId;
+
+    @Value("${razorpay.key.secret}")
+    private String razorpayKeySecret;
+
+    // ── Online Payment (Razorpay Order Initiation) ────────────────────────────
 
     @Override
     @Transactional
@@ -70,6 +79,24 @@ public class PaymentServiceImpl implements PaymentService {
         Order order = buildOrder(session, redisCart, PaymentMethod.ONLINE);
         order.setOrderStatus(OrderStatus.PENDING_PAYMENT);
 
+        // Convert Rupees to Paise (e.g. ₹150.75 -> 15075 paise)
+        long amountInPaise = order.getTotalAmount().multiply(new BigDecimal(100)).longValue();
+        String razorpayOrderId;
+
+        try {
+            RazorpayClient client = new RazorpayClient(razorpayKeyId, razorpayKeySecret);
+            JSONObject orderRequest = new JSONObject();
+            orderRequest.put("amount", amountInPaise);
+            orderRequest.put("currency", "INR");
+            orderRequest.put("receipt", "RCPT-" + order.getId().toString().substring(0, 10));
+
+            com.razorpay.Order rzpOrder = client.orders.create(orderRequest);
+            razorpayOrderId = rzpOrder.get("id");
+        } catch (Exception e) {
+            log.error("Razorpay order generation failed: {}", e.getMessage());
+            throw new PaymentException("Could not initialize payment gateway: " + e.getMessage());
+        }
+
         String qrToken = qrCodeUtil.generateToken();
         order.setExitQrToken(qrToken);
         order = orderRepository.save(order);
@@ -79,10 +106,53 @@ public class PaymentServiceImpl implements PaymentService {
                 paymentQrTtlMinutes, TimeUnit.MINUTES);
 
         return ApiResponse.PaymentInitiated.builder()
-                .orderId(order.getId()).method(PaymentMethod.ONLINE)
-                .totalAmount(order.getTotalAmount()).qrToken(qrToken)
+                .orderId(order.getId())
+                .method(PaymentMethod.ONLINE)
+                .totalAmount(order.getTotalAmount())
+                .qrToken(qrToken)
                 .qrImageBase64(qrCodeUtil.generateQrBase64(qrToken))
-                .qrExpirySeconds(paymentQrTtlMinutes * 60).build();
+                .qrExpirySeconds(paymentQrTtlMinutes * 60)
+                .razorpayOrderId(razorpayOrderId)
+                .amountInPaise(amountInPaise)
+                .razorpayKeyId(razorpayKeyId)
+                .build();
+    }
+
+    // ── Verify Razorpay Payment (Called by App upon SDK callback) ─────────────
+
+    @Override
+    @Transactional
+    public ApiResponse.BillDto verifyRazorpayPayment(PaymentRequest.VerifyRazorpay request) {
+        Order order = orderRepository.findByIdWithItems(request.getOrderId())
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found."));
+
+        if (order.getOrderStatus() == OrderStatus.PAID) {
+            throw new PaymentException("Order has already been processed.");
+        }
+
+        // Verify Razorpay HMAC-SHA256 signature
+        try {
+            String payload = request.getRazorpayOrderId() + "|" + request.getRazorpayPaymentId();
+            boolean isValid = Utils.verifySignature(payload, request.getRazorpaySignature(), razorpayKeySecret);
+            if (!isValid) {
+                throw new PaymentException("Invalid payment signature.");
+            }
+        } catch (Exception e) {
+            log.error("Signature verification exception: {}", e.getMessage());
+            throw new PaymentException("Security signature validation failed: " + e.getMessage());
+        }
+
+        // Mark as paid
+        order.setPaymentStatus(PaymentStatus.COMPLETED);
+        order.setOrderStatus(OrderStatus.PAID);
+        order.setPaidAt(OffsetDateTime.now());
+        orderRepository.save(order);
+
+        PaymentHistory history = savePaymentHistory(order);
+        decrementMongoStock(order);
+        endSession(order.getSession(), order.getUser().getId());
+
+        return buildBillDto(order, history);
     }
 
     // ── Cash Payment ──────────────────────────────────────────────────────────
@@ -111,10 +181,13 @@ public class PaymentServiceImpl implements PaymentService {
                 counterQrTtlMinutes, TimeUnit.MINUTES);
 
         return ApiResponse.PaymentInitiated.builder()
-                .orderId(order.getId()).method(PaymentMethod.CASH)
-                .totalAmount(order.getTotalAmount()).qrToken(qrToken)
+                .orderId(order.getId())
+                .method(PaymentMethod.CASH)
+                .totalAmount(order.getTotalAmount())
+                .qrToken(qrToken)
                 .qrImageBase64(qrCodeUtil.generateQrBase64(qrToken))
-                .qrExpirySeconds(counterQrTtlMinutes * 60).build();
+                .qrExpirySeconds(counterQrTtlMinutes * 60)
+                .build();
     }
 
     // ── Guard Exit QR ─────────────────────────────────────────────────────────
@@ -126,20 +199,16 @@ public class PaymentServiceImpl implements PaymentService {
 
         if (Boolean.TRUE.equals(order.getQrUsed()))
             throw new PaymentException("This QR code has already been used.");
-        if (order.getOrderStatus() != OrderStatus.PENDING_PAYMENT)
-            throw new PaymentException("Order is not in a payable state.");
+        if (order.getOrderStatus() != OrderStatus.PENDING_PAYMENT && order.getOrderStatus() != OrderStatus.PAID)
+            throw new PaymentException("Order is not in a valid exit state.");
         if (order.getPaymentMethod() != PaymentMethod.ONLINE)
             throw new PaymentException("This QR is not for an online payment.");
 
-        order.setPaymentStatus(PaymentStatus.COMPLETED);
-        order.setOrderStatus(OrderStatus.PAID);
         order.setQrUsed(true);
-        order.setPaidAt(OffsetDateTime.now());
         orderRepository.save(order);
 
-        PaymentHistory history = savePaymentHistory(order);
-        decrementMongoStock(order); // MongoDB stock update
-        endSession(order.getSession(), order.getUser().getId());
+        PaymentHistory history = paymentHistoryRepository.findByOrderId(order.getId())
+                .orElseGet(() -> savePaymentHistory(order));
 
         return buildBillDto(order, history);
     }
@@ -165,7 +234,7 @@ public class PaymentServiceImpl implements PaymentService {
         orderRepository.save(order);
 
         PaymentHistory history = savePaymentHistory(order);
-        decrementMongoStock(order); // MongoDB stock update
+        decrementMongoStock(order);
         endSession(order.getSession(), order.getUser().getId());
 
         return buildBillDto(order, history);
@@ -185,9 +254,13 @@ public class PaymentServiceImpl implements PaymentService {
 
         List<ApiResponse.CartItemDto> items = withItems.getItems().stream()
                 .map(i -> ApiResponse.CartItemDto.builder()
-                        .barcode(i.getBarcode()).productName(i.getProductName())
-                        .mrp(i.getMrp()).discountPrice(i.getDiscountPrice())
-                        .quantity(i.getQuantity()).lineTotal(i.getLineTotal()).build())
+                        .barcode(i.getBarcode())
+                        .productName(i.getProductName())
+                        .mrp(i.getMrp())
+                        .discountPrice(i.getDiscountPrice())
+                        .quantity(i.getQuantity())
+                        .lineTotal(i.getLineTotal())
+                        .build())
                 .toList();
 
         return ApiResponse.CounterCartDto.builder()
@@ -195,8 +268,10 @@ public class PaymentServiceImpl implements PaymentService {
                 .userId(withItems.getUser().getId())
                 .userName(withItems.getUser().getName())
                 .userPhone(withItems.getUser().getPhone())
-                .items(items).totalAmount(withItems.getTotalAmount())
-                .storeName(withItems.getStore().getName()).build();
+                .items(items)
+                .totalAmount(withItems.getTotalAmount())
+                .storeName(withItems.getStore().getName())
+                .build();
     }
 
     // ── Payment History ───────────────────────────────────────────────────────
@@ -208,12 +283,16 @@ public class PaymentServiceImpl implements PaymentService {
                 .findByUserIdOrderByPaidAtDesc(principal.getId(), PageRequest.of(page, size));
         return pageResult.getContent().stream()
                 .map(ph -> ApiResponse.PaymentHistoryDto.builder()
-                        .id(ph.getId()).orderId(ph.getOrder().getId())
-                        .billRef(ph.getBillRef()).paymentMethod(ph.getPaymentMethod())
-                        .totalAmount(ph.getTotalAmount()).itemCount(ph.getItemCount())
+                        .id(ph.getId())
+                        .orderId(ph.getOrder().getId())
+                        .billRef(ph.getBillRef())
+                        .paymentMethod(ph.getPaymentMethod())
+                        .totalAmount(ph.getTotalAmount())
+                        .itemCount(ph.getItemCount())
                         .storeName(ph.getStore().getName())
                         .brandName(ph.getStore().getBrand().getName())
-                        .paidAt(ph.getPaidAt()).build())
+                        .paidAt(ph.getPaidAt())
+                        .build())
                 .toList();
     }
 
@@ -224,9 +303,13 @@ public class PaymentServiceImpl implements PaymentService {
         Stores store = storeRepository.getReferenceById(session.getStore().getId());
 
         Order order = Order.builder()
-                .session(session).user(user).store(store)
-                .paymentMethod(method).subtotal(cart.getSubtotal())
-                .totalDiscount(cart.getTotalDiscount()).totalAmount(cart.getTotalAmount())
+                .session(session)
+                .user(user)
+                .store(store)
+                .paymentMethod(method)
+                .subtotal(cart.getSubtotal())
+                .totalDiscount(cart.getTotalDiscount())
+                .totalAmount(cart.getTotalAmount())
                 .build();
 
         List<OrderItem> orderItems = cart.getItems().values().stream()
@@ -234,7 +317,7 @@ public class PaymentServiceImpl implements PaymentService {
                         .order(order)
                         .barcode(ci.getBarcode())
                         .productName(ci.getProductName())
-                        .productMongoId(ci.getProductMongoId()) // MongoDB ID
+                        .productMongoId(ci.getProductMongoId())
                         .mrp(ci.getMrp())
                         .discountPrice(ci.getDiscountPrice())
                         .quantity(ci.getQuantity())
@@ -249,17 +332,16 @@ public class PaymentServiceImpl implements PaymentService {
     private PaymentHistory savePaymentHistory(Order order) {
         String billRef = "BILL-" + order.getId().toString().substring(0, 8).toUpperCase();
         return paymentHistoryRepository.save(PaymentHistory.builder()
-                .order(order).user(order.getUser()).store(order.getStore())
+                .order(order)
+                .user(order.getUser())
+                .store(order.getStore())
                 .paymentMethod(order.getPaymentMethod())
                 .totalAmount(order.getTotalAmount())
                 .itemCount(order.getItems().stream().mapToInt(OrderItem::getQuantity).sum())
-                .billRef(billRef).build());
+                .billRef(billRef)
+                .build());
     }
 
-    /**
-     * MongoDB mein stock decrement karo — payment ke baad.
-     * Stock 0 hone pe available = false automatically.
-     */
     private void decrementMongoStock(Order order) {
         String storeId = order.getStore().getId().toString();
         order.getItems().forEach(item -> {
@@ -286,18 +368,27 @@ public class PaymentServiceImpl implements PaymentService {
     private ApiResponse.BillDto buildBillDto(Order order, PaymentHistory history) {
         List<ApiResponse.BillItemDto> billItems = order.getItems().stream()
                 .map(i -> ApiResponse.BillItemDto.builder()
-                        .barcode(i.getBarcode()).productName(i.getProductName())
-                        .mrp(i.getMrp()).discountPrice(i.getDiscountPrice())
-                        .quantity(i.getQuantity()).lineTotal(i.getLineTotal()).build())
+                        .barcode(i.getBarcode())
+                        .productName(i.getProductName())
+                        .mrp(i.getMrp())
+                        .discountPrice(i.getDiscountPrice())
+                        .quantity(i.getQuantity())
+                        .lineTotal(i.getLineTotal())
+                        .build())
                 .toList();
 
         return ApiResponse.BillDto.builder()
-                .orderId(order.getId()).billRef(history.getBillRef())
-                .paymentMethod(order.getPaymentMethod()).items(billItems)
-                .subtotal(order.getSubtotal()).totalDiscount(order.getTotalDiscount())
-                .totalAmount(order.getTotalAmount()).paidAt(order.getPaidAt())
+                .orderId(order.getId())
+                .billRef(history.getBillRef())
+                .paymentMethod(order.getPaymentMethod())
+                .items(billItems)
+                .subtotal(order.getSubtotal())
+                .totalDiscount(order.getTotalDiscount())
+                .totalAmount(order.getTotalAmount())
+                .paidAt(order.getPaidAt())
                 .storeName(order.getStore().getName())
-                .brandName(order.getStore().getBrand().getName()).build();
+                .brandName(order.getStore().getBrand().getName())
+                .build();
     }
 
     private Order resolveOrderByExitQr(String token) {

@@ -28,16 +28,30 @@ public class PaymentController {
     /**
      * POST /api/v1/payment/initiate/online
      * Customer chooses to pay online.
-     * Returns a QR code (base64 PNG) that the exit gate guard scans.
-     * Once initiated, the customer cannot go back to editing the cart.
+     * Generates Razorpay Order ID and an Exit QR code for the security gate.
      */
     @PostMapping("/initiate/online")
     public ResponseEntity<ApiResponse.Success<ApiResponse.PaymentInitiated>> initiateOnline(
             @AuthenticationPrincipal UserPrincipal principal) {
         ApiResponse.PaymentInitiated result = paymentService.initiateOnlinePayment(principal);
         return ResponseEntity.ok(ApiResponse.Success.<ApiResponse.PaymentInitiated>builder()
-                .message("Online payment initiated. Please scan the QR at the exit gate after paying.")
+                .message("Online payment initiated with Razorpay gateway.")
                 .data(result)
+                .build());
+    }
+
+    /**
+     * POST /api/v1/payment/verify-razorpay
+     * Mobile app sends signature after Razorpay payment completes.
+     * Verifies signature, updates order to PAID, generates permanent bill, and ends active session.
+     */
+    @PostMapping("/verify-razorpay")
+    public ResponseEntity<ApiResponse.Success<ApiResponse.BillDto>> verifyRazorpay(
+            @Valid @RequestBody PaymentRequest.VerifyRazorpay request) {
+        ApiResponse.BillDto bill = paymentService.verifyRazorpayPayment(request);
+        return ResponseEntity.ok(ApiResponse.Success.<ApiResponse.BillDto>builder()
+                .message("Razorpay payment verified. Bill generated successfully.")
+                .data(bill)
                 .build());
     }
 
