@@ -79,6 +79,9 @@ public class PaymentServiceImpl implements PaymentService {
         Order order = buildOrder(session, redisCart, PaymentMethod.ONLINE);
         order.setOrderStatus(OrderStatus.PENDING_PAYMENT);
 
+        // 1. Order ko pehle save karein taaki order.getId() null na rahe
+        order = orderRepository.save(order);
+
         // Convert Rupees to Paise (e.g. ₹150.75 -> 15075 paise)
         long amountInPaise = order.getTotalAmount().multiply(new BigDecimal(100)).longValue();
         String razorpayOrderId;
@@ -88,7 +91,9 @@ public class PaymentServiceImpl implements PaymentService {
             JSONObject orderRequest = new JSONObject();
             orderRequest.put("amount", amountInPaise);
             orderRequest.put("currency", "INR");
-            orderRequest.put("receipt", "RCPT-" + order.getId().toString().substring(0, 10));
+
+            // 2. Ab order.getId() valid UUID dega, NullPointerException nahi aayega
+            orderRequest.put("receipt", "RCPT-" + order.getId().toString().substring(0, 8));
 
             com.razorpay.Order rzpOrder = client.orders.create(orderRequest);
             razorpayOrderId = rzpOrder.get("id");
@@ -97,6 +102,7 @@ public class PaymentServiceImpl implements PaymentService {
             throw new PaymentException("Could not initialize payment gateway: " + e.getMessage());
         }
 
+        // 3. Exit QR token generate aur save karein
         String qrToken = qrCodeUtil.generateToken();
         order.setExitQrToken(qrToken);
         order = orderRepository.save(order);
