@@ -1,4 +1,5 @@
 package com.example.Qpay.Repository;
+
 import com.example.Qpay.Entity.ScanHistory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,10 @@ public interface ScanHistoryRepository extends JpaRepository<ScanHistory, UUID> 
 
     Page<ScanHistory> findByUserIdOrderByScannedAtDesc(UUID userId, Pageable pageable);
 
-    @Query("SELECT sh FROM ScanHistory sh JOIN FETCH sh.productName WHERE sh.session.id = :sessionId ORDER BY sh.scannedAt DESC")
+    // ✅ Same session me duplicate barcode insert hone se rokne ke liye
+    boolean existsBySessionIdAndBarcode(UUID sessionId, String barcode);
+
+    // ✅ Fixed query (productName string field hai, isliye seedha fetch/select hoga)
+    @Query("SELECT sh FROM ScanHistory sh WHERE sh.session.id = :sessionId ORDER BY sh.scannedAt DESC")
     List<ScanHistory> findBySessionWithProduct(@Param("sessionId") UUID sessionId);
 }

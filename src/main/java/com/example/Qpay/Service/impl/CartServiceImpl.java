@@ -158,18 +158,25 @@ public class CartServiceImpl implements CartService {
         // 6. Redis me save karo
         saveCart(ctx.cartKey(), ctx.cart());
 
-        // 7. Scan history me bhi save karo (permanent record)
-        ScanHistory scanHistory = ScanHistory.builder()
-                .session(ctx.session())
-                .user(ctx.session().getUser())        // ← user add karo
-                .barcode(product.getBarcode())
-                .productName(product.getName())
-                .imageUrl(product.getImageUrl())
-                .scannedPrice(discountPrice)
-                .productMongoId(product.getId())      // ← productMongoId add karo
-                .scannedAt(OffsetDateTime.now())
-                .build();
-        scanHistoryRepository.save(scanHistory);
+        // 7. Scan history me tabhi save karo agar ye product is session me pehli baar scan hua ho
+        boolean alreadyInHistory = scanHistoryRepository.existsBySessionIdAndBarcode(
+                ctx.session().getId(),
+                product.getBarcode()
+        );
+
+        if (!alreadyInHistory) {
+            ScanHistory scanHistory = ScanHistory.builder()
+                    .session(ctx.session())
+                    .user(ctx.session().getUser())
+                    .barcode(product.getBarcode())
+                    .productName(product.getName())
+                    .imageUrl(product.getImageUrl())
+                    .scannedPrice(discountPrice)
+                    .productMongoId(product.getId())
+                    .scannedAt(OffsetDateTime.now())
+                    .build();
+            scanHistoryRepository.save(scanHistory);
+        }
 
         log.info("Barcode {} scanned in session {}", request.getBarcode(), ctx.session().getId());
 
