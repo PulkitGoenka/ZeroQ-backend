@@ -18,10 +18,10 @@ public interface ScanHistoryRepository extends JpaRepository<ScanHistory, UUID> 
 
     Page<ScanHistory> findByUserIdOrderByScannedAtDesc(UUID userId, Pageable pageable);
 
-    // ✅ Same session me duplicate barcode insert hone se rokne ke liye
-    boolean existsBySessionIdAndBarcode(UUID sessionId, String barcode);
+    // ✅ Explicit JPQL check:
+    @Query("SELECT COUNT(sh) > 0 FROM ScanHistory sh WHERE sh.session.id = :sessionId AND sh.barcode = :barcode")
+    boolean existsBySessionIdAndBarcode(@Param("sessionId") UUID sessionId, @Param("barcode") String barcode);
 
-    // ✅ Fixed query (productName string field hai, isliye seedha fetch/select hoga)
     @Query("SELECT sh FROM ScanHistory sh WHERE sh.session.id = :sessionId ORDER BY sh.scannedAt DESC")
     List<ScanHistory> findBySessionWithProduct(@Param("sessionId") UUID sessionId);
 }

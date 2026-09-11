@@ -159,6 +159,7 @@ public class CartServiceImpl implements CartService {
         saveCart(ctx.cartKey(), ctx.cart());
 
         // 7. Scan history me tabhi save karo agar ye product is session me pehli baar scan hua ho
+        // 7. Scan history me tabhi save karo agar ye product is session me pehli baar scan hua ho
         boolean alreadyInHistory = scanHistoryRepository.existsBySessionIdAndBarcode(
                 ctx.session().getId(),
                 product.getBarcode()
@@ -175,7 +176,8 @@ public class CartServiceImpl implements CartService {
                     .productMongoId(product.getId())
                     .scannedAt(OffsetDateTime.now())
                     .build();
-            scanHistoryRepository.save(scanHistory);
+            scanHistoryRepository.saveAndFlush(scanHistory);
+            log.info("Saved item {} to scan history for session {}", product.getBarcode(), ctx.session().getId());
         }
 
         log.info("Barcode {} scanned in session {}", request.getBarcode(), ctx.session().getId());
