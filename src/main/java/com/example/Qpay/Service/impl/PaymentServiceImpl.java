@@ -133,14 +133,24 @@ public class PaymentServiceImpl implements PaymentService {
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found."));
 
         if (order.getOrderStatus() == OrderStatus.PAID) {
-            throw new PaymentException("Order has already been processed.");
+            log.warn("Order {} is already marked as PAID.", order.getId());
+            PaymentHistory history = paymentHistoryRepository.findByOrderId(order.getId())
+                    .orElseGet(() -> savePaymentHistory(order));
+            return buildBillDto(order, history);
         }
 
-        // Verify Razorpay HMAC-SHA256 signature
+        // Standard Razorpay Payment Verification using JSONObject
         try {
-            String payload = request.getRazorpayOrderId() + "|" + request.getRazorpayPaymentId();
-            boolean isValid = Utils.verifySignature(payload, request.getRazorpaySignature(), razorpayKeySecret);
+            JSONObject options = new JSONObject();
+            options.put("razorpay_order_id", request.getRazorpayOrderId().trim());
+            options.put("razorpay_payment_id", request.getRazorpayPaymentId().trim());
+            options.put("razorpay_signature", request.getRazorpaySignature().trim());
+
+            boolean isValid = Utils.verifyPaymentSignature(options, razorpayKeySecret.trim());
+
             if (!isValid) {
+                log.error("Signature mismatch: orderId={}, rzpOrderId={}, rzpPaymentId={}",
+                        request.getOrderId(), request.getRazorpayOrderId(), request.getRazorpayPaymentId());
                 throw new PaymentException("Invalid payment signature.");
             }
         } catch (Exception e) {
@@ -160,7 +170,6 @@ public class PaymentServiceImpl implements PaymentService {
 
         return buildBillDto(order, history);
     }
-
     // ── Cash Payment ──────────────────────────────────────────────────────────
 
     @Override
